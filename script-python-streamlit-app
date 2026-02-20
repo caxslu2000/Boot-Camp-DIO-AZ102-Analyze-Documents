@@ -1,46 +1,42 @@
-import streamlit as st
+import os
+from azure.core.credentials import AzureKeyCredential
+from azure.ai.formrecognizer import DocumentAnalysisClient
+from dotenv import load_dotenv
 
-# 1. Definimos a função de validação primeiro e do lado de fora
-def show_image_and_validation(blob_url, credit_card_info):
-    # O Streamlit aceita o próprio uploaded_file no lugar de uma URL de fato para exibir a imagem
-    st.image(blob_url, caption="Imagem enviada", use_column_width=True)
-    st.write("Resultado da validação:")
-    
-    # Usamos .get() para evitar erro caso a chave não exista
-    if credit_card_info and credit_card_info.get("card_name"):
-        st.markdown("<h1 style='color: green;'>Cartão Válido</h1>", unsafe_allow_html=True)
-        st.write(f"Nome do Titular: {credit_card_info['card_name']}")
-        st.write(f"Banco Emissor: {credit_card_info['bank_name']}")
-        st.write(f"Data de Validade: {credit_card_info['expiry_date']}")
-    else:
-        st.markdown("<h1 style='color: red;'>Cartão Inválido</h1>", unsafe_allow_html=True)
-        st.write("Este não é um cartão de crédito válido.")
+load_dotenv()
 
-# 2. Depois definimos a interface
-def configure_interface():
-    st.title("Upload de Arquivo DIO - Desafio 1 - Azure - Fake Docs")
-    uploaded_file = st.file_uploader("Escolha um arquivo", type=["png", "jpg", "jpeg"])
-
-    if uploaded_file is not None:
-        fileName = uploaded_file.name
+def analyze_credit_card(blob_url):
+    try:
+        endpoint = os.getenv("AZURE_DI_ENDPOINT")
+        key = os.getenv("AZURE_DI_KEY")
         
-        # Para testar visualmente, estou passando o próprio arquivo como se fosse o blob_url
-        blob_url = uploaded_file 
+        # Inicia o cliente do Document Intelligence
+        document_client = DocumentAnalysisClient(
+            endpoint=endpoint, credential=AzureKeyCredential(key)
+        )
         
-        if blob_url:
-            st.write(f"Arquivo {fileName} enviado com sucesso para o Azure Blob Storage")
-            
-            # Simulando o retorno que a Inteligência Artificial da Azure te daria:
-            credit_card_info = {
-                "card_name": "João da Silva",
-                "bank_name": "Nubank",
-                "expiry_date": "12/28"
-            } 
-            
-            # Chamamos a função de validação
-            show_image_and_validation(blob_url, credit_card_info)
-        else:
-            st.write(f"Erro ao enviar o arquivo {fileName} para o Azure Blob Storage")
-
-if __name__ == "__main__":
-    configure_interface()
+        # Manda analisar a imagem pela URL
+        poller = document_client.begin_analyze_document_from_url("prebuilt-document", blob_url)
+        result = poller.result()
+        
+        card_info = {}
+        
+        # Percorre os pares de texto que a IA encontrou para montar nosso dicionário
+        for kv_pair in result.key_value_pairs:
+            if kv_pair.key and kv_pair.value:
+                key_text = kv_pair.key.content.lower()
+                value_text = kv_pair.value.content
+                
+                # Lógica básica para identificar os campos (pode ser ajustada dependendo dos cartões fake)
+                if "name" in key_text or "nome" in key_text:
+                    card_info["card_name"] = value_text
+                elif "bank" in key_text or "banco" in key_text:
+                    card_info["bank_name"] = value_text
+                elif "valid" in key_text or "exp" in key_text or "date" in key_text:
+                    card_info["expiry_date"] = value_text
+        
+        return card_info
+        
+    except Exception as e:
+        print(f"Erro na análise de Document Intelligence: {e}")
+        return None
